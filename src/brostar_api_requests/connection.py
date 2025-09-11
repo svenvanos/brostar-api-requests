@@ -145,7 +145,7 @@ class BROSTARConnection:
         r = self.s.get(url=f"{self.website}/uploadtasks/{uuid}/", timeout=15)
         r.raise_for_status()
         status = r.json().get("status", "PENDING")
-        while status != "COMPLETED" and timer < 45:
+        while status != ["COMPLETED", "FAILED"] or timer < 45:
             time.sleep(3)
             try:
                 r = self.s.get(url=f"{self.website}/uploadtasks/{uuid}/", timeout=15)
@@ -156,6 +156,7 @@ class BROSTARConnection:
                 continue
 
             status = r.json().get("status", "PENDING")
+            logger.info(f"Retrieved status: {status}")
             timer += 3
 
         return r

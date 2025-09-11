@@ -162,7 +162,7 @@ class GMWConstruction(CamelModel):
     delivery_context: str
     construction_standard: str
     initial_function: str
-    nitg_code: str
+    nitg_code: str | None = None
     number_of_monitoring_tubes: int
     ground_level_stable: str
     well_stability: str | None = None

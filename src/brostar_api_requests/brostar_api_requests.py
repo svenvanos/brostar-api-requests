@@ -146,7 +146,7 @@ def map_polars_to_gmw_constructions(df: pl.DataFrame) -> GMWConstruction:
     construction = GMWConstruction(
         # Required fields
         object_id_accountable_party=putnaam,  # Using Putnaam as specified
-        nitg_code=str(putnaam)[:-1],
+        nitg_code=None,
         delivery_context=first_row.get("Kader aanlevering", ""),
         construction_standard=first_row.get("Kwaliteitsnorminrichting", ""),
         initial_function=first_row.get("Initiële functie", ""),
@@ -154,8 +154,8 @@ def map_polars_to_gmw_constructions(df: pl.DataFrame) -> GMWConstruction:
         ground_level_stable=first_row.get("Maaiveld stabiel", ""),
         well_stability=first_row.get("Putstabiliteit"),
         # Optional fields with defaults
-        owner="17278718",  # Provincie Noord-Brabant
-        maintenance_responsible_party="16005077",  # BrabantWater
+        owner="51640813",  # Scheldestromen
+        maintenance_responsible_party="51640813",  # Scheldestromen
         well_head_protector=first_row.get("Beschermconstructie", ""),
         well_construction_date=format_date(first_row.get("Inrichtingsdatum")),
         delivered_location=delivered_location,
@@ -169,6 +169,40 @@ def map_polars_to_gmw_constructions(df: pl.DataFrame) -> GMWConstruction:
     )
 
     return construction
+
+
+def read_xml_uploadtask(uuid: str, requestReference: str, output_dir: str): # -> instead of file_name, use requestReference to save it
+    brostar_api_key = os.getenv("BROSTAR_API_KEY")
+    brostar = BROSTARConnection(brostar_api_key)  # BROSTAR API Key
+    brostar.set_website(production=True)
+
+    r = brostar.s.get(url=f"{brostar.website}/uploadtasks/{uuid}/read_xml/")
+    # r.content This is the byte form XML data
+    # Save this as file_name.xml
+    r.raise_for_status()
+    filename = requestReference.replace(".", "_") + ".xml"
+    output_path = os.path.join(output_dir, filename)
+
+    with open(output_path, "wb") as f:
+        f.write(r.content)
+
+
+
+# # Auto-create filename (last part of URL, or fallback if it ends with /)
+# filename = url.rstrip("/").split("/")[-1]
+# if not filename.endswith(".xml"):
+#     filename += ".xml"
+
+# output_path = os.path.join(folder, filename)
+
+# # Download and save
+# response = requests.get(url)
+# response.raise_for_status()  # ensure no error
+
+# with open(output_path, "wb") as f:
+#     f.write(response.content)
+
+# print(f"File saved to {output_path}")
 
 
 def create_monitoring_tube(row: dict, tube_number: int) -> MonitoringTube:
@@ -191,7 +225,7 @@ def create_monitoring_tube(row: dict, tube_number: int) -> MonitoringTube:
         screen_length=max(row.get("Filterlengte (meters)", 0.5), 0.5),
         screen_protection=None,  # No clear mapping
         sock_material=row.get("Kousmateriaal", ""),
-        plain_tube_part_length=max(row.get("Lengte stijgbuisdeel (meters)", 0.5), 0.5),
+        plain_tube_part_length = max(float(row.get("Lengte stijgbuisdeel (meters)") or 0.5), 0.5),
         sediment_sump_length=row.get("Zandvanglengte (meters)")
         if row.get("Zandvanglengte (meters)")
         else None,
@@ -268,7 +302,6 @@ def bulk_gmw_construction_request(excel_file: str | Path, kvk: str) -> None:
     brostar_api_key = os.getenv("BROSTAR_API_KEY")
     brostar = BROSTARConnection(brostar_api_key)  # BROSTAR API Key
     brostar.set_website(production=True)
-
     df = pl.read_excel(excel_file, has_header=True)
     putten = df.unique("Putnaam").to_series(0).to_list()
 
@@ -286,7 +319,7 @@ def bulk_gmw_construction_request(excel_file: str | Path, kvk: str) -> None:
 
         payload = UploadTask(
             bro_domain="GMW",
-            project_number="1497",
+            project_number="1",
             registration_type="GMW_Construction",
             request_type="registration",
             sourcedocument_data=sourcedocument_data,
@@ -299,6 +332,74 @@ def bulk_gmw_construction_request(excel_file: str | Path, kvk: str) -> None:
 
         uuid: str = r.json()["uuid"]
         brostar.await_completed(uuid=uuid)
+    return
+
+
+def bulk_gmw_construction_request_xml_extract(excel_file: str | Path, kvk: str) -> None:
+    """
+    Use an excel to create multiple GMWs.
+    Then extract the uploaded xml files from the uploadtask
+    """
+    # Access your API key
+    brostar_api_key = os.getenv("BROSTAR_API_KEY")
+    brostar = BROSTARConnection(brostar_api_key)  # BROSTAR API Key
+    brostar.set_website(production=True)
+    df = pl.read_excel(excel_file, has_header=True)
+    putten = df.unique("Putnaam").to_series(0).to_list()
+
+    # Folder where you want to save the file
+
+
+    output_dir_path = str(os.path.dirname(os.path.realpath(excel_file))) + "/output"
+    print(str(output_dir_path))
+    os.makedirs(output_dir_path, exist_ok=True)
+
+    put_issues_str = ""
+
+    for put in putten:
+        try:
+            construction = map_polars_to_gmw_constructions(df.filter(pl.col("Putnaam").eq(put)))
+        except Exception as e:
+            put_issues_str += f"{put}: {e}\n\n"
+
+        ### Setup the payload
+        metadata = UploadTaskMetadata(
+            request_reference=f"{put}",
+            delivery_accountable_party=kvk,
+            quality_regime="IMBRO",
+        )
+        print(metadata.request_reference)
+
+        ## Extract excel into GMW Construction
+        sourcedocument_data = construction
+
+        payload = UploadTask(
+            bro_domain="GMW",
+            project_number="1",
+            registration_type="GMW_Construction",
+            request_type="registration",
+            sourcedocument_data=sourcedocument_data,
+            metadata=metadata,
+        )
+        payload = payload.model_dump(mode="json", by_alias=True)
+        # print(payload)
+        r = brostar.post_upload(payload=payload, is_json=True)
+        r.raise_for_status()
+
+        uuid: str = r.json()["uuid"]
+        read_xml_uploadtask(uuid, metadata.request_reference, output_dir_path)
+        # brostar.await_completed(uuid=uuid)
+        # print(uuid)
+
+
+    filename = "_logging_errors.txt"
+    output_path = os.path.join(output_dir_path, filename)
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(put_issues_str)
+
+    print(f'saved errors in {filename}')
+    
     return
 
 
