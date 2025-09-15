@@ -225,7 +225,9 @@ def create_monitoring_tube(row: dict, tube_number: int) -> MonitoringTube:
         screen_length=max(row.get("Filterlengte (meters)", 0.5), 0.5),
         screen_protection=None,  # No clear mapping
         sock_material=row.get("Kousmateriaal", ""),
-        plain_tube_part_length = max(float(row.get("Lengte stijgbuisdeel (meters)") or 0.5), 0.5),
+        plain_tube_part_length = max(row["Lengte stijgbuisdeel (meters)"], 0.5)
+            if row.get("Lengte stijgbuisdeel (meters)") is not None
+            else None,
         sediment_sump_length=row.get("Zandvanglengte (meters)")
         if row.get("Zandvanglengte (meters)")
         else None,
