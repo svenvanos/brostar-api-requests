@@ -58,7 +58,7 @@ def convert_excel(input_path):
         "Zandvanglengte (meters)",
         "Buisdeel ingeplaatst",
         "Diameter bovenkantbuis (mm)",
-        "Variabele diameter",
+        "Variable diameter",
         "MethodePositiebepalingBovenkantbuis",
         "Positie bovenkantbuis (m+NAP)",
         "Lengte stijgbuisdeel (meters)",
