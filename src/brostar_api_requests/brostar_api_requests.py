@@ -154,8 +154,8 @@ def map_polars_to_gmw_constructions(df: pl.DataFrame) -> GMWConstruction:
         ground_level_stable=first_row.get("Maaiveld stabiel", ""),
         well_stability=first_row.get("Putstabiliteit"),
         # Optional fields with defaults
-        owner="51640813",  # Scheldestromen
-        maintenance_responsible_party="51640813",  # Scheldestromen
+        owner="01169292",  # Tynaarlo
+        maintenance_responsible_party="01169292",  # Tynaarlo
         well_head_protector=first_row.get("Beschermconstructie", ""),
         well_construction_date=format_date(first_row.get("Inrichtingsdatum")),
         delivered_location=delivered_location,
@@ -303,7 +303,7 @@ def bulk_gmw_construction_request(excel_file: str | Path, kvk: str) -> None:
     # Access your API key
     brostar_api_key = os.getenv("BROSTAR_API_KEY")
     brostar = BROSTARConnection(brostar_api_key)  # BROSTAR API Key
-    brostar.set_website(production=True)
+    brostar.set_website(production=False)
     df = pl.read_excel(excel_file, has_header=True)
     putten = df.unique("Putnaam").to_series(0).to_list()
 
@@ -330,6 +330,7 @@ def bulk_gmw_construction_request(excel_file: str | Path, kvk: str) -> None:
         payload = payload.model_dump(mode="json", by_alias=True)
         print(payload)
         r = brostar.post_upload(payload=payload, is_json=True)
+        print(r.content)
         r.raise_for_status()
 
         uuid: str = r.json()["uuid"]
