@@ -3,24 +3,43 @@ import polars as pl
 
 from src.brostar_api_requests.brostar_api_requests import (
     delete_invalid_upload_tasks,
-    bulk_gmw_construction_request_xml_extract
+    bulk_gmw_construction_request_xml_extract,
+    bulk_gmw_construction_request
 )
+
+OMHUIZING_MAPPING = {
+    "Gele straatpot": "potWaterdicht", # IMBRO
+    "koker-kunststof": "KokerNietMetaal", # IMBRO
+    "straatpot": "potWaterdicht", # IMBRO
+    "Schutkoker": "koker", # IMBRO/A
+    "Blauwe straatpot": "potWaterdicht", # IMBRO
+    "koker-staal": "KokerMetaal", # IMBRO
+    "anders": "onbekend", # IMBRO/A
+    None: "onbekend", # IMBRO/A
+}
 
 def convert_excel(input_path):
     # set excel output path
     output_path = input_path[:-5] + "_out.xlsx"
 
-    df = pl.read_excel(input_path, sheet_id=1)
+    df = pl.read_excel(
+        input_path,
+        read_options={
+            "header_row":2,
+        })
+    
     print(df.head(10))
+
+    # print(df["MP-omhuizing"].unique())
     kolomnamen = [
         "Putnaam",
         "Filternummer",
         "X-coordinaat(RD)",
         "Y-coordinaat(RD)",
         "Coordinatenstelsel",
-        "Methode Coordinatenbepaling",
+        "Method Coordinatenbepaling",
         "Maaiveldpositie (m+NAP)",
-        "Methode Maaiveldpositiebepaling",
+        "Method Maaiveldpositiebepaling",
         "Inrichtingsdatum",
         "OnvolledigeDatum",
         "Kwaliteitsnorminrichting",
@@ -49,74 +68,90 @@ def convert_excel(input_path):
         "Aanvulmaterial buis",
         "Lijm"
     ]
-    df_out = df.with_columns([
-        pl.col("name_by_ref_well").fill_null(strategy="forward").alias("Putnaam"),
-        pl.col("tubeNumber").alias("Filternummer"),
-        pl.col("x").alias("X-coordinaat(RD)"),
-        pl.col("y").alias("Y-coordinaat(RD)"),
-        pl.lit("RD").alias("Coordinatenstelsel"),
-        pl.lit("onbekend").alias("Methode Coordinatenbepaling"),
-        pl.col("MV").alias("Maaiveldpositie (m+NAP)"),
-        pl.lit("onbekend").alias("Methode Maaiveldpositiebepaling"),
 
-        # als 'datum_naar_bro' aanwezig is de tijd droppen om formaat van {YYYY-MM-DD 00:00:00} naar {yyyy-mm-dd} te krijgen
-        # als alleen jaar of jaar maand is opgegeven, dan blijft die staan,
+    df_out = df.with_columns([
+        # naam en filternummer misschien splitsen,
+        # maar wat dan te doen met de coordinaten aangezien die bij elke buis uniek zijn.
+        # Verder was 27-10 bepaald dat Jeroen misschien nieuwe naamgeving zou leveren
+        # pl.when(pl.col("Naam").is_null())
+        # .then(pl.col("MP-code"))
+        # .otherwise(
+        #     pl.col("Naam")
+        # ).alias("Putnaam"),
+        pl.col("MP-code").alias("Putnaam"),
+        pl.lit(1).alias("Filternummer"),
+        # _____________ navragen of losse putten zijn of losse peilbuizen in put
+        # zijn losse potten
+
+        pl.col("MP-Xwaarde").alias("X-coordinaat(RD)"),
+        pl.col("MP-Ywaarde").alias("Y-coordinaat(RD)"),
+        pl.lit("RD").alias("Coordinatenstelsel"),
+
+        # uit mail:
+        # RTKGPS0tot2cm, ik merk hierbij op dat de aanwezigheid van gebouwen maar ook bomen invloed hebben op de betrouwbaarheid
+        # van de meting. Bij een meting vlakbij een gebouw of vlakbij bomen zijn er minder verbindingen met satellieten waardoor
+        # de nauwkeurigheid afneemt.
+        pl.lit("RTKGPS0tot2cm").alias("Method Coordinatenbepaling"),
+
+        pl.col("PB-Mv").alias("Maaiveldpositie (m+NAP)"),
+
+        # aanname op basis van Methode Coordinatenbepaling
+        pl.lit("RKTGPS0tot4cm").alias("Method Maaiveldpositiebepaling"),
+
+        # als 'MP-start' aanwezig is de tijd formatten naar yyyy-mm-dd
         # Als null, dan leeg laten
-        pl.when(pl.col("datum_naar_bro").is_null())
+        pl.when(pl.col("MP-start").is_null())
         .then(pl.lit(""))
         .otherwise(
-            pl.col("datum_naar_bro")
-            .str.replace(" 00:00:00", "")
+            pl.col("MP-start")
         )
         .alias("Inrichtingsdatum"),
-                
+
         pl.lit("").alias("OnvolledigeDatum"),
-        pl.lit("onbekend").alias("Kwaliteitsnorminrichting"),
+        pl.lit("geen").alias("Kwaliteitsnorminrichting"), # aanname 
         pl.lit("").alias("Kaartblad"),
         pl.lit("").alias("NITG-code"),
-        pl.lit("onbekend").alias("Beschermconstructie"),
-        pl.lit("publiekeTaak").alias("Kader aanlevering"),
-        pl.lit("stand").alias("Initiële functie"),
-        pl.lit("ja").alias("Maaiveld stabiel"),
-        pl.lit("stabielNAP").alias("Putstabiliteit"),
-        pl.lit("standaardbuis").alias("BuisType"),
-        pl.lit("gebruiksklaar").alias("Buis status"),
-        pl.lit("").alias("Buis in gebruik"),
-        pl.lit("ja").alias("Drukdop"),
 
-        # Voorzien van zandvang: ja als Lzvang niet null, anders nee
-        pl.when(pl.col("Lzvang").is_not_null())
-        .then(pl.lit("ja"))
-        .otherwise(pl.lit("nee"))
-        .alias("Voorzien van zandvang"),
+        # mapping omhuizing types gedaan
+        pl.col("MP-omhuizing")
+        .replace_strict(OMHUIZING_MAPPING, default="onbekend")
+        .alias("Beschermconstructie"),
 
-        pl.col("Lzvang").alias("Zandvanglengte (meters)"),
-        pl.lit("").alias("Buisdeel ingeplaatst"),
-        pl.lit(25).alias("Diameter bovenkantbuis (mm)"),
-        pl.lit("nee").alias("Variabele diameter"),
-        pl.lit("onbekend").alias("MethodePositiebepalingBovenkantbuis"),
-        pl.col("BKB").cast(pl.Float64, strict=False).alias("Positie bovenkantbuis (m+NAP)"),
+        pl.lit("publiekeTaak").alias("Kader aanlevering"), # aanname
+        pl.lit("stand").alias("Initiële functie"), # aanname
+        pl.lit("ja").alias("Maaiveld stabiel"), # aanname
+        pl.lit("stabielNAP").alias("Putstabiliteit"), # aanname, overgenomen van Scheldestromen
+        pl.lit("standaardbuis").alias("BuisType"), # aanname
+        pl.lit("gebruiksklaar").alias("Buis status"), # aanname
+        pl.lit("ja").alias("Buis in gebruik"), # aanname, meetnetten zijn actief op één na
+        pl.lit("nee").alias("Drukdop"), # aanname
 
-        # Lengte stijgbuisdeel: Lbuis - Lzvang - 1
-        (
-            pl.when(pl.col("Lbuis").is_null())
-            .then(None)
-            .otherwise(
-                pl.col("Lbuis").cast(pl.Float64)
-                -
-                pl.when(pl.col("Lzvang").is_null())
-                .then(0.0)  # vervang null bij Lzvang door 0
-                .otherwise(pl.col("Lzvang").cast(pl.Float64))
-                - 1
-            )
-        ).alias("Lengte stijgbuisdeel (meters)"),
+        pl.lit("nee").alias("Voorzien van zandvang"), # uit overleg 27-10
+        pl.lit("").alias("Zandvanglengte (meters)"), # leeg want overal geen zandvang
+        pl.lit("").alias("Buisdeel ingeplaatst"), # aanname
+        pl.when(pl.col("diameter peilbuis").is_null())
+        .then(32) # uit mail 27-10
+        .otherwise(
+            pl.col("diameter peilbuis")
+        ).alias("Diameter bovenkantbuis (mm)"), # 2024 buizen uit geleverde document proefboringen gehaald
+        pl.lit("nee").alias("Variable diameter"), # aanname
+        pl.lit("RTKGPS0tot4cm").alias("MethodePositiebepalingBovenkantbuis"), # aanname
+        pl.col("PB-Bkpb").cast(pl.Float64, strict=False).alias("Positie bovenkantbuis (m+NAP)"),
 
-        pl.lit(1).alias("Filterlengte (meters)"),
-        pl.lit("onbekend").alias("Materiaal peilbuis"),
-        pl.lit("onbekend").alias("Kousmateriaal"),
-        pl.lit("onbekend").alias("Aanvulmaterial buis"),
-        pl.lit("onbekend").alias("Lijm"),
-    ]).select(kolomnamen)
+        # zitten rare getallen tussen, ook ~ -3 meter, kan zijn dat het soms in mNAP gegeven is, staat volgende bij:
+        # Bkf = Bovenkant filter
+        # Afstand bovenkant peilbuis - bovenkant filter in m.
+        # kan niet negatief zijn ----------> vragen aan Jeroen
+        (pl.col("PB-Bkpb") - pl.col("PB-Bkf")).alias("Lengte stijgbuisdeel (meters)"),
+        pl.col("PB-Fl").alias("Filterlengte (meters)"),
+
+        pl.lit("pvc").alias("Materiaal peilbuis"), # uit mail 27-10
+        pl.lit("onbekend").alias("Kousmateriaal"), # aanname
+        pl.lit("boorgatmateriaal").alias("Aanvulmaterial buis"),
+        pl.lit("geen").alias("Lijm"),
+    ])
+
+    df_out = df_out.select(kolomnamen)
 
     df_out.write_excel(output_path)
     return output_path
@@ -124,14 +159,14 @@ def convert_excel(input_path):
 
 def main():
     # file_path = r"C:\Users\steven.hosper\Downloads\duplicates_ids.xlsx"
-    # correct_bulk_gld(file_path)
+    # correct_bulk_ld(file_path)
 
     # delete_invalid_upload_tasks()
 
-    # file_path = r"C:\Users\steven.hosper\Desktop\PythonPackages\BrostarAPI\20250425_move_wells.xlsx"
-    input_path = r"C:\Users\sven.vanos\Documents\20250162 Scheldestromen BRO levering\result_locs_to_create_gmw_snapshot.xlsx"
-    converted_path = convert_excel(input_path)
-    bulk_gmw_construction_request_xml_extract(excel_file=converted_path, kvk="51640813")
+    input_path = r"C:\Users\sven.vanos\Documents\20250222 BRO Tynaarlo\Grondwatermeetnetoverzicht 19-11-2025\test.xlsx"
+    output_path = convert_excel(input_path)
+    bulk_gmw_construction_request(excel_file=output_path, kvk="01169292")
+    # project nummer productie: 7293
 
     # BrabantWater corrections
     # file_path = r"C:\Users\steven.hosper\Downloads\BROLab_ImportExcel.xlsx"
